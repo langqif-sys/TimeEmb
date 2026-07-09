@@ -1,0 +1,19 @@
+# Dataset (Exclude large CSV files)
+dataest/
+dataset/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Checkpoints, logs, and results
+checkpoints/
+results/
+logs/
+*.log
+
+# IDE & OS settings
+.vscode/
+.idea/
+.DS_Store
