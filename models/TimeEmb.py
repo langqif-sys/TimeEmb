@@ -25,7 +25,10 @@ class Model(nn.Module):
 
         self.emb_hour = nn.Parameter(torch.zeros(self.emb_len_hour, self.enc_in, self.seq_len // 2 + 1), requires_grad=True)
         self.emb_day = nn.Parameter(torch.zeros(self.emb_len_day, self.enc_in, self.seq_len // 2 + 1), requires_grad=True)
-        self.w = nn.Parameter(self.scale * torch.randn(1, self.seq_len))
+        # Define the cutoff frequency index (e.g., top 20%)
+        self.cutoff_idx = max(1, int((self.seq_len // 2 + 1) * 0.2))
+        self.w_trend = nn.Parameter(self.scale * torch.randn(1, self.seq_len))
+        self.w_fluct = nn.Parameter(self.scale * torch.randn(1, self.seq_len))
 
     def forward(self, x, hour_index, day_index = None):
         # x: (batch_size, seq_len, enc_in), hour_index: (batch_size,), day_index: (batch_size,)
@@ -37,7 +40,8 @@ class Model(nn.Module):
 
         x = x.permute(0, 2, 1)
         x = torch.fft.rfft(x, dim=2, norm='ortho')
-        w = torch.fft.rfft(self.w, dim=1, norm='ortho')
+        w_trend = torch.fft.rfft(self.w_trend, dim=1, norm='ortho')
+        w_fluct = torch.fft.rfft(self.w_fluct, dim=1, norm='ortho')
         x_freq_real = x.real
         x_freq_imag = x.imag
 
@@ -49,8 +53,20 @@ class Model(nn.Module):
             emb_day = self.emb_day[day_index % self.emb_len_day]
             x_freq_real = x_freq_real - emb_day
 
-        x_freq_minus_emb = torch.complex(x_freq_real, x_freq_imag)
-        y = x_freq_minus_emb * w
+        x_dynamic = torch.complex(x_freq_real, x_freq_imag)
+        
+        # Build frequency mask (Koopa logic)
+        mask_trend = torch.zeros_like(x_dynamic)
+        mask_trend[:, :, :self.cutoff_idx] = 1.0
+        
+        x_local_trend = x_dynamic * mask_trend
+        x_local_fluct = x_dynamic * (1 - mask_trend)
+        
+        y_local_trend = x_local_trend * w_trend
+        y_local_fluct = x_local_fluct * w_fluct
+        
+        y = y_local_trend + y_local_fluct
+        
         y_real = y.real
         y_freq_imag = y.imag
 
