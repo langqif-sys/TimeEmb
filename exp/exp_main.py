@@ -88,7 +88,7 @@ class Exp_Main(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if any(substr in self.args.model for substr in {'TimeEmb'}):
-                            outputs = self.model(batch_x, hour_index, day_index)
+                            outputs = self.model(batch_x, hour_index, day_index, batch_x_mark)
                         elif any(substr in self.args.model for substr in
                                  {'Linear', 'MLP', 'TST'}):
                             outputs = self.model(batch_x)
@@ -99,7 +99,7 @@ class Exp_Main(Exp_Basic):
                                 outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
                     if any(substr in self.args.model for substr in {'TimeEmb'}):
-                        outputs = self.model(batch_x, hour_index, day_index)
+                        outputs = self.model(batch_x, hour_index, day_index, batch_x_mark)
                     elif any(substr in self.args.model for substr in {'Linear', 'MLP', 'TST'}):
                         outputs = self.model(batch_x)
                     else:
@@ -175,7 +175,7 @@ class Exp_Main(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if any(substr in self.args.model for substr in {'TimeEmb'}):
-                            outputs = self.model(batch_x, hour_index, day_index)
+                            outputs = self.model(batch_x, hour_index, day_index, batch_x_mark)
                         elif any(substr in self.args.model for substr in
                                  {'Linear', 'MLP', 'TST'}):
                             outputs = self.model(batch_x)
@@ -192,7 +192,7 @@ class Exp_Main(Exp_Basic):
                         train_loss.append(loss.item())
                 else:
                     if any(substr in self.args.model for substr in {'TimeEmb'}):
-                        outputs = self.model(batch_x, hour_index, day_index)
+                        outputs = self.model(batch_x, hour_index, day_index, batch_x_mark)
                     elif any(substr in self.args.model for substr in {'Linear', 'MLP', 'TST'}):
                         outputs = self.model(batch_x)
                     else:
@@ -362,7 +362,7 @@ class Exp_Main(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if any(substr in self.args.model for substr in {'TimeEmb'}):
-                            outputs = self.model(batch_x, hour_index, day_index)
+                            outputs = self.model(batch_x, hour_index, day_index, batch_x_mark)
                         elif any(substr in self.args.model for substr in
                                  {'Linear', 'MLP', 'TST'}):
                             outputs = self.model(batch_x)
@@ -373,7 +373,7 @@ class Exp_Main(Exp_Basic):
                                 outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
                     if any(substr in self.args.model for substr in {'TimeEmb'}):
-                        outputs = self.model(batch_x, hour_index, day_index)
+                        outputs = self.model(batch_x, hour_index, day_index, batch_x_mark)
                     elif any(substr in self.args.model for substr in {'Linear', 'MLP', 'TST'}):
                         outputs = self.model(batch_x)
                     else:
@@ -465,7 +465,7 @@ class Exp_Main(Exp_Basic):
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         if any(substr in self.args.model for substr in {'TimeEmb'}):
-                            outputs = self.model(batch_x, hour_index, day_index)
+                            outputs = self.model(batch_x, hour_index, day_index, batch_x_mark)
                         elif any(substr in self.args.model for substr in
                                  {'Linear', 'MLP', 'TST'}):
                             outputs = self.model(batch_x)
@@ -476,7 +476,7 @@ class Exp_Main(Exp_Basic):
                                 outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
                     if any(substr in self.args.model for substr in {'TimeEmb'}):
-                        outputs = self.model(batch_x, hour_index, day_index)
+                        outputs = self.model(batch_x, hour_index, day_index, batch_x_mark)
                     elif any(substr in self.args.model for substr in {'Linear', 'MLP', 'TST'}):
                         outputs = self.model(batch_x)
                     else:
