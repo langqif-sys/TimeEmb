@@ -54,8 +54,8 @@ class InteractionBlock(nn.Module):
         self.t1 = create_network()
         self.s2 = create_network()
         self.t2 = create_network()
-        self.scale_1 = nn.Parameter(torch.tensor(0.1))
-        self.scale_2 = nn.Parameter(torch.tensor(0.1))
+        self.scale_1 = nn.Parameter(torch.tensor(0.01))
+        self.scale_2 = nn.Parameter(torch.tensor(0.01))
 
     def forward(self, x):
         # x: [B, enc_in, channels]
@@ -74,6 +74,7 @@ class InteractionBlock(nn.Module):
 class Model(nn.Module):
     """
     Upgraded TimeEmb Model incorporating CFPT Continuous Temporal Encoding & Invertible Interaction.
+    Uses Zero-Init Residual Gates (gamma_time, alpha_inn) to protect baseline performance.
     """
     def __init__(self, configs):
         super(Model, self).__init__()
@@ -114,6 +115,10 @@ class Model(nn.Module):
         inn_channels = (freq_len * 2) if (freq_len * 2) % 2 == 0 else (freq_len * 2 + 1)
         self.inn_block = InteractionBlock(channels=inn_channels)
 
+        # 5. Zero-Initialized Residual Scale Parameters (Crucial for stability)
+        self.gamma_time = nn.Parameter(torch.zeros(1), requires_grad=True) # Controls CFPT continuous temporal encoder contribution
+        self.alpha_inn = nn.Parameter(torch.zeros(1), requires_grad=True)  # Controls CFPT INN coupling contribution
+
         self.w_trend = nn.Parameter(self.scale * torch.randn(1, self.seq_len))
         self.w_fluct = nn.Parameter(self.scale * torch.randn(1, self.seq_len))
 
@@ -137,7 +142,6 @@ class Model(nn.Module):
         # Extract Time-Invariant Component
         emb_time_real = 0
         if x_mark_enc is not None:
-            # Dynamically adapt time_dim if input mark shape differs from default
             if x_mark_enc.shape[-1] != self.time_dim:
                 self.time_dim = x_mark_enc.shape[-1]
                 self.continuous_time_enc = ContinuousTimeEncoder(
@@ -146,7 +150,8 @@ class Model(nn.Module):
                     seq_len=self.seq_len
                 ).to(x.device)
             emb_dynamic = self.continuous_time_enc(x_mark_enc) # [B, enc_in, freq_len]
-            emb_time_real = emb_time_real + emb_dynamic
+            # Scaled by zero-initialized gamma_time
+            emb_time_real = emb_time_real + self.gamma_time * emb_dynamic
 
         if self.use_hour_index and hour_index is not None:
             emb_hour = self.emb_hour[hour_index % self.emb_len_hour]
@@ -159,12 +164,15 @@ class Model(nn.Module):
         x_freq_real = x_freq_real - emb_time_real
         x_dynamic = torch.complex(x_freq_real, x_freq_imag)
 
-        # INN Coupling Interaction for lossless frequency disentanglement
+        # INN Coupling Interaction with Residual Gate
         B, C, F = x_dynamic.shape
         freq_concat = torch.cat([x_dynamic.real, x_dynamic.imag], dim=-1)
         freq_interacted = self.inn_block(freq_concat)
-        freq_real, freq_imag = torch.chunk(freq_interacted, 2, dim=-1)
-        x_dynamic = torch.complex(freq_real, freq_imag)
+        freq_real_inn, freq_imag_inn = torch.chunk(freq_interacted, 2, dim=-1)
+        x_dynamic_inn = torch.complex(freq_real_inn, freq_imag_inn)
+
+        # Controlled by zero-initialized alpha_inn (at epoch 0, x_dynamic is untouched)
+        x_dynamic = x_dynamic + self.alpha_inn * (x_dynamic_inn - x_dynamic)
 
         # Build frequency mask for trend vs fluctuation
         mask_trend = torch.zeros_like(x_dynamic)
