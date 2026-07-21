@@ -4,7 +4,7 @@ root_path_name=./dataset/
 data_path_name=weather.csv
 model_id_name=weather
 data_name=Weather
-random_seed=2024
+random_seed=2023
 seq_len=96
 for pred_len in 96 192 336 720
 do
@@ -21,9 +21,12 @@ do
       --enc_in 21 \
       --use_hour_index 1 \
       --hour_length 12 \
-      --train_epochs 30 \
-      --patience 8 \
-      --rec_lambda 0.75 \
-      --auxi_lambda 0.25 \
-      --itr 1 --batch_size 256 --learning_rate 0.0005 --random_seed $random_seed
+      --train_epochs 35 \
+      --patience 10 \
+      --rec_lambda 0.2 \
+      --auxi_lambda 0.8 \
+      --auxi_mode rfft \
+      --auxi_type complex \
+      --fc_dropout 0.05 \
+      --itr 1 --batch_size 256 --learning_rate 0.001 --random_seed $random_seed
 done
