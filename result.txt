@@ -34,3 +34,6 @@ mse:0.42316386103630066, mae:0.432998925447464
 ETTh1_720_720_TimeEmb_ETTh1_ftM_sl720_pl720_hi1_di0_hl24_dl7_dm512_ax0.75_rl0.25_axlMAE_mf1_test_0  
 mse:0.46737194061279297, mae:0.4689257740974426
 
+test_dual_moe_TimeEmb_ETTh1_ftM_sl96_pl96_hi1_di0_hl24_dl7_dm512_ax1_rl0.0_axlMAE_mf1_test_0  
+mse:0.4932309091091156, mae:0.46639466285705566
+
