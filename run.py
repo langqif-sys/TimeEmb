@@ -39,16 +39,6 @@ parser.add_argument('--use_hour_index', type=int, default=1, help='1: use hour_i
 parser.add_argument('--use_day_index', type=int, default=0, help='1: use day_index or 0: no use')
 parser.add_argument('--hour_length', type=int, default=24, help='embedding length of hour index')
 parser.add_argument('--day_length', type=int, default=7, help='embedding length of day index')
-
-# Time-Frequency Dual-Domain MoE
-parser.add_argument('--use_time_expert', type=int, default=1, help='1: enable time-domain patch expert, 0: disable')
-parser.add_argument('--use_freq_expert', type=int, default=1, help='1: enable freq-domain expert, 0: disable')
-parser.add_argument('--use_moe_router', type=int, default=1, help='1: use adaptive gated router, 0: simple average')
-parser.add_argument('--time_d_model', type=int, default=128, help='dimension of time-domain patch transformer')
-parser.add_argument('--time_n_heads', type=int, default=8, help='num heads of time-domain patch transformer')
-parser.add_argument('--time_d_ff', type=int, default=256, help='ffn dimension of time-domain patch transformer')
-parser.add_argument('--time_e_layers', type=int, default=1, help='num layers of time-domain patch transformer')
-parser.add_argument('--router_noise', type=float, default=0.0, help='router noise scale for exploration')
 # Optimization Objective
 parser.add_argument('--rec_lambda', type=float, default=0., help='weight of reconstruction function')
 parser.add_argument('--auxi_lambda', type=float, default=1, help='weight of auxilary function')
