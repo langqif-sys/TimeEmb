@@ -94,6 +94,15 @@ parser.add_argument('--activation', type=str, default='gelu', help='activation')
 parser.add_argument('--output_attention', action='store_true', help='whether to output attention in ecoder')
 parser.add_argument('--do_predict', action='store_true', help='whether to predict unseen future data')
 
+# BasisFormer Time-Domain Basis Selection
+parser.add_argument('--use_basis', type=int, default=1, help='1: enable BasisFormer time-domain basis selection branch; 0: frequency only')
+parser.add_argument('--basis_nums', type=int, default=16, help='number of temporal prototype bases')
+parser.add_argument('--basis_heads', type=int, default=4, help='num of basis attention heads')
+parser.add_argument('--basis_blocks', type=int, default=1, help='num of BCAB blocks')
+parser.add_argument('--basis_bottle', type=int, default=4, help='bottleneck ratio for basis MLP')
+parser.add_argument('--basis_d_model', type=int, default=128, help='hidden dimension for basis Coefnet')
+
+
 # optimization
 parser.add_argument('--num_workers', type=int, default=10, help='data loader num workers')
 parser.add_argument('--itr', type=int, default=1, help='experiments times')

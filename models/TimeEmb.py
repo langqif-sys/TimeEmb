@@ -96,10 +96,147 @@ class InteractionBlock(nn.Module):
 
         return torch.cat([y1, y2], dim=-1)
 
+try:
+    from torch.nn.utils.parametrizations import weight_norm as wn
+except ImportError:
+    from torch.nn.utils import weight_norm as wn
+
+class MLP_bottle(nn.Module):
+    def __init__(self, input_len, output_len, bottleneck, bias=True):
+        super(MLP_bottle, self).__init__()
+        bottleneck = max(1, bottleneck)
+        self.linear1 = nn.Sequential(
+            wn(nn.Linear(input_len, bottleneck, bias=bias)),
+            nn.ReLU(),
+            wn(nn.Linear(bottleneck, bottleneck, bias=bias))
+        )
+        self.linear2 = nn.Sequential(
+            wn(nn.Linear(bottleneck, bottleneck)),
+            nn.ReLU(),
+            wn(nn.Linear(bottleneck, output_len))
+        )
+        self.skip = wn(nn.Linear(input_len, bottleneck, bias=bias))
+        self.act = nn.ReLU()
+
+    def forward(self, x):
+        x = self.act(self.linear1(x) + self.skip(x))
+        x = self.linear2(x)
+        return x
+
+class channel_AutoCorrelationLayer(nn.Module):
+    def __init__(self, d_model, n_heads, d_keys=None, d_values=None, dropout=0.0):
+        super(channel_AutoCorrelationLayer, self).__init__()
+        d_keys = d_keys or (d_model // n_heads)
+        d_values = d_values or (d_model // n_heads)
+
+        self.query_projection = wn(nn.Linear(d_model, d_keys * n_heads))
+        self.key_projection = wn(nn.Linear(d_model, d_keys * n_heads))
+        self.value_projection = wn(nn.Linear(d_model, d_values * n_heads))
+        self.out_projection = wn(nn.Linear(d_values * n_heads, d_model))
+        self.n_heads = n_heads
+        self.scale = d_keys ** -0.5
+        self.attend = nn.Softmax(dim=-1)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, queries, keys, values):
+        B, L, _ = queries.shape
+        B, S, _ = keys.shape
+        H = self.n_heads
+
+        queries = self.query_projection(queries).view(B, L, H, -1).permute(0, 2, 1, 3)
+        keys = self.key_projection(keys).view(B, S, H, -1).permute(0, 2, 1, 3)
+        values = self.value_projection(values).view(B, S, H, -1).permute(0, 2, 1, 3)
+
+        dots = torch.matmul(queries, keys.transpose(-1, -2)) * self.scale
+        attn = self.attend(dots)
+        attn = self.dropout(attn)
+
+        out = torch.matmul(attn, values)
+        out = out.permute(0, 2, 1, 3).reshape(B, L, -1)
+        return self.out_projection(out), attn
+
+class BCAB(nn.Module):
+    """
+    Bidirectional Cross-Attention Block (inspired by BasisFormer).
+    Enables mutual knowledge exchange between time-domain series and basis prototypes.
+    """
+    def __init__(self, d_model, heads=4, d_ff=None, dropout=0.1):
+        super(BCAB, self).__init__()
+        d_ff = d_ff or 4 * d_model
+        self.cross_attention_basis = channel_AutoCorrelationLayer(d_model, heads, dropout=dropout)
+        self.conv1_basis = wn(nn.Linear(d_model, d_ff))
+        self.conv2_basis = wn(nn.Linear(d_ff, d_model))
+        self.dropout_basis = nn.Dropout(dropout)
+        self.activation_basis = nn.ReLU()
+
+        self.cross_attention_ts = channel_AutoCorrelationLayer(d_model, heads, dropout=dropout)
+        self.conv1_ts = wn(nn.Linear(d_model, d_ff))
+        self.conv2_ts = wn(nn.Linear(d_ff, d_model))
+        self.dropout_ts = nn.Dropout(dropout)
+        self.activation_ts = nn.ReLU()
+
+        self.layer_norm11 = nn.LayerNorm(d_model)
+        self.layer_norm12 = nn.LayerNorm(d_model)
+        self.layer_norm21 = nn.LayerNorm(d_model)
+        self.layer_norm22 = nn.LayerNorm(d_model)
+
+    def forward(self, basis, series):
+        # 1. Basis attends to series
+        basis_add, basis_attn = self.cross_attention_basis(basis, series, series)
+        basis_out = self.layer_norm11(basis + self.dropout_basis(basis_add))
+        y_basis = self.dropout_basis(self.conv2_basis(self.dropout_basis(self.activation_basis(self.conv1_basis(basis_out)))))
+        basis_out = self.layer_norm12(basis_out + y_basis)
+
+        # 2. Series attends to basis
+        series_add, series_attn = self.cross_attention_ts(series, basis, basis)
+        series_out = self.layer_norm21(series + self.dropout_ts(series_add))
+        y_ts = self.dropout_ts(self.conv2_ts(self.dropout_ts(self.activation_ts(self.conv1_ts(series_out)))))
+        series_out = self.layer_norm22(series_out + y_ts)
+
+        return basis_out, series_out, basis_attn, series_attn
+
+class last_layer(nn.Module):
+    """
+    Computes cross-correlation similarity score matrix between series and bases.
+    Acts as the feature selection coefficient matrix (Soft-KNN prototype selection).
+    """
+    def __init__(self, d_model, n_heads, d_keys=None):
+        super(last_layer, self).__init__()
+        d_keys = d_keys or (d_model // n_heads)
+        self.query_projection = wn(nn.Linear(d_model, d_keys * n_heads))
+        self.key_projection = wn(nn.Linear(d_model, d_keys * n_heads))
+        self.n_heads = n_heads
+        self.scale = d_keys ** -0.5
+
+    def forward(self, queries, keys):
+        B, L, _ = queries.shape
+        B, S, _ = keys.shape
+        H = self.n_heads
+
+        queries = self.query_projection(queries).view(B, L, H, -1).permute(0, 2, 1, 3)
+        keys = self.key_projection(keys).view(B, S, H, -1).permute(0, 2, 1, 3)
+        dots = torch.matmul(queries, keys.transpose(-1, -2)) * self.scale
+        return dots
+
+class Coefnet(nn.Module):
+    """
+    BasisFormer Coefnet: Stacks BCAB layers and extracts dynamic selection coefficients.
+    """
+    def __init__(self, blocks, d_model, heads):
+        super(Coefnet, self).__init__()
+        self.layers = nn.ModuleList([BCAB(d_model, heads) for _ in range(blocks)])
+        self.last_layer = last_layer(d_model, heads)
+
+    def forward(self, basis, series):
+        for layer in self.layers:
+            basis, series, _, _ = layer(basis, series)
+        coef = self.last_layer(series, basis)  # [B, heads, C, N]
+        return coef
+
 class Model(nn.Module):
     """
-    Upgraded TimeEmb Model incorporating CFPT Continuous Temporal Encoding & Invertible Interaction.
-    [Optimized]: Parameter-efficient architectures, adaptive cutoff ratio, and warm-start residual gating.
+    Upgraded TimeEmb Model incorporating CFPT, Koopa, and BasisFormer Time-Domain Basis Selection.
+    Features dual-stream frequency-time extraction, dynamic basis selection, and warm-start residual gating.
     """
     def __init__(self, configs):
         super(Model, self).__init__()
@@ -154,14 +291,41 @@ class Model(nn.Module):
         self.w_trend = nn.Parameter(self.scale * torch.randn(1, self.seq_len))
         self.w_fluct = nn.Parameter(self.scale * torch.randn(1, self.seq_len))
 
+        # 6. BasisFormer Time-Domain Basis Selection Branch
+        self.use_basis = getattr(configs, 'use_basis', 1)
+        if self.use_basis:
+            self.basis_nums = getattr(configs, 'basis_nums', 16)
+            self.basis_heads = getattr(configs, 'basis_heads', 4)
+            self.basis_blocks = getattr(configs, 'basis_blocks', 1)
+            self.basis_bottle = getattr(configs, 'basis_bottle', 4)
+            self.basis_d_model = getattr(configs, 'basis_d_model', 128)
+
+            # Normalized Learnable Temporal Prototype Bases
+            self.bases = nn.Parameter(torch.randn(1, self.seq_len + self.pred_len, self.basis_nums) * 0.02)
+
+            # Projections to basis_d_model
+            self.project_series = wn(nn.Linear(self.seq_len, self.basis_d_model))
+            self.project_basis = wn(nn.Linear(self.seq_len, self.basis_d_model))
+
+            # Coefnet for cross-attention and score computation
+            self.coefnet = Coefnet(blocks=self.basis_blocks, d_model=self.basis_d_model, heads=self.basis_heads)
+
+            # Projection for future basis & reconstruction
+            bottle = max(1, self.pred_len // self.basis_bottle)
+            self.MLP_y = MLP_bottle(self.pred_len, self.basis_heads * int(self.pred_len / self.basis_heads), bottle)
+            self.MLP_sy = MLP_bottle(self.basis_heads * int(self.pred_len / self.basis_heads), self.pred_len, bottle)
+
+            # Warm-start residual gate (started at 0.01)
+            self.alpha_basis = nn.Parameter(torch.full((1,), 0.01), requires_grad=True)
+
     def forward(self, x, hour_index=None, day_index=None, x_mark_enc=None):
         if self.use_revin:
             seq_mean = torch.mean(x, dim=1, keepdim=True)
             seq_var = torch.var(x, dim=1, keepdim=True) + 1e-5
             x = (x - seq_mean) / torch.sqrt(seq_var)
 
-        x = x.permute(0, 2, 1) # [B, enc_in, seq_len]
-        x_fft = torch.fft.rfft(x, dim=2, norm='ortho')
+        x_perm = x.permute(0, 2, 1) # [B, enc_in, seq_len]
+        x_fft = torch.fft.rfft(x_perm, dim=2, norm='ortho')
         w_trend = torch.fft.rfft(self.w_trend, dim=1, norm='ortho')
         w_fluct = torch.fft.rfft(self.w_fluct, dim=1, norm='ortho')
         x_freq_real = x_fft.real
@@ -219,10 +383,40 @@ class Model(nn.Module):
         y_freq_imag = y.imag
 
         y_freq = torch.complex(y_real, y_freq_imag)
-        y = torch.fft.irfft(y_freq, n=self.seq_len, dim=2, norm="ortho")
-        y = self.model(y).permute(0, 2, 1)
+        y_time_rec = torch.fft.irfft(y_freq, n=self.seq_len, dim=2, norm="ortho")
+        y_freq_out = self.model(y_time_rec).permute(0, 2, 1) # [B, pred_len, enc_in]
+
+        # -----------------------------------------------------------------
+        # 2. Time-Domain Basis Selection Branch (BasisFormer Coefnet)
+        # -----------------------------------------------------------------
+        if self.use_basis:
+            # x is normalized by RevIN: [B, seq_len, enc_in]
+            feat_series = self.project_series(x.permute(0, 2, 1))  # [B, enc_in, basis_d_model]
+
+            # Normalize bases over temporal length
+            m = self.bases / torch.sqrt(torch.sum(self.bases ** 2, dim=1, keepdim=True) + 1e-5)  # [1, seq_len + pred_len, N]
+            raw_m1 = m[:, :self.seq_len].permute(0, 2, 1)  # [1, N, seq_len]
+            raw_m2 = m[:, self.seq_len:].permute(0, 2, 1)  # [1, N, pred_len]
+
+            # Broadcast bases across batch
+            raw_m1_batch = raw_m1.expand(B, -1, -1)
+            m1 = self.project_basis(raw_m1_batch)  # [B, N, basis_d_model]
+
+            # Coefnet computes cross-attention and projection score: [B, heads, enc_in, N]
+            score = self.coefnet(m1, feat_series)
+
+            # Project future bases and aggregate with selected weights
+            raw_m2_batch = raw_m2.expand(B, -1, -1)
+            base_fut = self.MLP_y(raw_m2_batch).reshape(B, self.basis_nums, self.basis_heads, -1).permute(0, 2, 1, 3)  # [B, heads, N, pred_len / heads]
+            out_basis = torch.matmul(score, base_fut).permute(0, 2, 1, 3).reshape(B, C, -1)  # [B, enc_in, heads * (pred_len / heads)]
+            out_basis = self.MLP_sy(out_basis).permute(0, 2, 1)  # [B, pred_len, enc_in]
+
+            # Dual-Stream Warm-Start Residual Fusion
+            y_final = y_freq_out + self.alpha_basis * out_basis
+        else:
+            y_final = y_freq_out
 
         if self.use_revin:
-            y = y * torch.sqrt(seq_var) + seq_mean
+            y_final = y_final * torch.sqrt(seq_var) + seq_mean
 
-        return y
+        return y_final
