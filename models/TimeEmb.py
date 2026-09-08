@@ -315,8 +315,10 @@ class Model(nn.Module):
             self.MLP_y = MLP_bottle(self.pred_len, self.basis_heads * int(self.pred_len / self.basis_heads), bottle)
             self.MLP_sy = MLP_bottle(self.basis_heads * int(self.pred_len / self.basis_heads), self.pred_len, bottle)
 
-            # Warm-start residual gate (started at 0.01)
-            self.alpha_basis = nn.Parameter(torch.full((1,), 0.01), requires_grad=True)
+            # Scale alignment and positive gating
+            self.norm_freq = nn.LayerNorm(self.enc_in)
+            self.norm_basis = nn.LayerNorm(self.enc_in)
+            self.gate_basis = nn.Parameter(torch.tensor([-2.0]), requires_grad=True)
 
     def forward(self, x, hour_index=None, day_index=None, x_mark_enc=None):
         if self.use_revin:
@@ -411,8 +413,11 @@ class Model(nn.Module):
             out_basis = torch.matmul(score, base_fut).permute(0, 2, 1, 3).reshape(B, C, -1)  # [B, enc_in, heads * (pred_len / heads)]
             out_basis = self.MLP_sy(out_basis).permute(0, 2, 1)  # [B, pred_len, enc_in]
 
-            # Dual-Stream Warm-Start Residual Fusion
-            y_final = y_freq_out + self.alpha_basis * out_basis
+            # Dual-Stream Scale-Aligned Residual Fusion with Positive Gate
+            norm_freq_out = self.norm_freq(y_freq_out)
+            norm_out_basis = self.norm_basis(out_basis)
+            alpha = torch.sigmoid(self.gate_basis)
+            y_final = norm_freq_out + alpha * norm_out_basis
         else:
             y_final = y_freq_out
 
