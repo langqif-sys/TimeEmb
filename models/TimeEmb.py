@@ -306,16 +306,16 @@ class Model(nn.Module):
         y_real = y.real + emb_time_real
         y_freq_imag = y.imag
 
+        y_freq = torch.complex(y_real, y_freq_imag)
         y = torch.fft.irfft(y_freq, n=self.seq_len, dim=2, norm="ortho")
         y_freq_out = self.model(y).permute(0, 2, 1) # [B, pred_len, enc_in]
 
         # Time-Domain Transient-Aware Complementary Gating (Scale & Direction Aligned)
         if self.use_transient:
             # Construct signed difference (direction) and magnitude (volatility energy)
-            # x is RevIN-normalized: [B, seq_len, enc_in]
-            x_t = x.permute(0, 2, 1) # [B, enc_in, seq_len]
-            x_diff_signed = torch.zeros_like(x_t)
-            x_diff_signed[:, :, 1:] = x_t[:, :, 1:] - x_t[:, :, :-1]
+            # Note: x is already [B, enc_in, seq_len]
+            x_diff_signed = torch.zeros_like(x)
+            x_diff_signed[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
             x_diff_mag = torch.abs(x_diff_signed)
 
             y_time_res = self.transient_extractor(x_diff_signed)
