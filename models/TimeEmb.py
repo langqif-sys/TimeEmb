@@ -96,10 +96,84 @@ class InteractionBlock(nn.Module):
 
         return torch.cat([y1, y2], dim=-1)
 
+class LocalTransientExtractor(nn.Module):
+    """
+    Multi-Scale Time-Domain Local Transient Extractor.
+    Captures localized abrupt variations and impulse residuals with multi-scale depthwise convolutions.
+    Features zero-initialization on final temporal projection for seamless warm-start scale alignment.
+    """
+    def __init__(self, seq_len, pred_len, hidden_dim=32):
+        super(LocalTransientExtractor, self).__init__()
+        self.seq_len = seq_len
+        self.pred_len = pred_len
+
+        d_ch = max(1, hidden_dim // 4)
+        self.conv3 = nn.Conv1d(1, d_ch, kernel_size=3, padding=1)
+        self.conv5 = nn.Conv1d(1, d_ch, kernel_size=5, padding=2)
+        self.conv7 = nn.Conv1d(1, d_ch, kernel_size=7, padding=3)
+        self.conv1 = nn.Conv1d(1, d_ch, kernel_size=1)
+
+        self.fuse = nn.Sequential(
+            nn.BatchNorm1d(d_ch * 4),
+            nn.GELU(),
+            nn.Conv1d(d_ch * 4, 1, kernel_size=1)
+        )
+
+        self.temporal_proj = nn.Sequential(
+            nn.Linear(seq_len, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, pred_len)
+        )
+
+        # Zero-Init: Guarantees 0-residual output at initial step (Scale Alignment)
+        nn.init.zeros_(self.temporal_proj[-1].weight)
+        nn.init.zeros_(self.temporal_proj[-1].bias)
+
+    def forward(self, x_diff_signed):
+        # x_diff_signed: [B, enc_in, seq_len]
+        B, C, L = x_diff_signed.shape
+        x_in = x_diff_signed.reshape(B * C, 1, L)
+
+        c3 = self.conv3(x_in)
+        c5 = self.conv5(x_in)
+        c7 = self.conv7(x_in)
+        c1 = self.conv1(x_in)
+
+        feat = torch.cat([c3, c5, c7, c1], dim=1) # [B*C, d_ch*4, L]
+        feat = self.fuse(feat).squeeze(1)          # [B*C, L]
+
+        out = self.temporal_proj(feat)             # [B*C, pred_len]
+        return out.reshape(B, C, self.pred_len).permute(0, 2, 1) # [B, pred_len, enc_in]
+
+
+class TransientAwareGate(nn.Module):
+    """
+    Transient-Aware Dynamic Confidence Gating.
+    Maps local differential fluctuation magnitude into bounded confidence weights in (0, 1).
+    """
+    def __init__(self, seq_len, pred_len, hidden_dim=32):
+        super(TransientAwareGate, self).__init__()
+        self.gate_net = nn.Sequential(
+            nn.Linear(seq_len, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, pred_len),
+            nn.Sigmoid()
+        )
+        # Negative bias init: starts gentle (~0.11), zero-weight init
+        nn.init.constant_(self.gate_net[-2].bias, -2.0)
+        nn.init.zeros_(self.gate_net[-2].weight)
+
+    def forward(self, x_diff_mag):
+        # x_diff_mag: [B, enc_in, seq_len]
+        gate = self.gate_net(x_diff_mag) # [B, enc_in, pred_len]
+        return gate.permute(0, 2, 1)     # [B, pred_len, enc_in]
+
 class Model(nn.Module):
     """
-    Upgraded TimeEmb Model incorporating CFPT Continuous Temporal Encoding & Invertible Interaction.
-    [Optimized]: Parameter-efficient architectures, adaptive cutoff ratio, and warm-start residual gating.
+    Upgraded TimeEmb Model incorporating CFPT Continuous Temporal Encoding,
+    Invertible Interaction, and Time-Domain Transient-Aware Complementary Gating.
     """
     def __init__(self, configs):
         super(Model, self).__init__()
@@ -153,6 +227,20 @@ class Model(nn.Module):
 
         self.w_trend = nn.Parameter(self.scale * torch.randn(1, self.seq_len))
         self.w_fluct = nn.Parameter(self.scale * torch.randn(1, self.seq_len))
+
+        # 6. Time-Domain Local Transient & Dynamic Gating Branch (Scale & Temporal Alignment)
+        self.use_transient = getattr(configs, 'use_transient', 1)
+        if self.use_transient:
+            self.transient_extractor = LocalTransientExtractor(
+                seq_len=self.seq_len,
+                pred_len=self.pred_len,
+                hidden_dim=32
+            )
+            self.transient_gate = TransientAwareGate(
+                seq_len=self.seq_len,
+                pred_len=self.pred_len,
+                hidden_dim=32
+            )
 
     def forward(self, x, hour_index=None, day_index=None, x_mark_enc=None):
         if self.use_revin:
@@ -218,11 +306,26 @@ class Model(nn.Module):
         y_real = y.real + emb_time_real
         y_freq_imag = y.imag
 
-        y_freq = torch.complex(y_real, y_freq_imag)
         y = torch.fft.irfft(y_freq, n=self.seq_len, dim=2, norm="ortho")
-        y = self.model(y).permute(0, 2, 1)
+        y_freq_out = self.model(y).permute(0, 2, 1) # [B, pred_len, enc_in]
+
+        # Time-Domain Transient-Aware Complementary Gating (Scale & Direction Aligned)
+        if self.use_transient:
+            # Construct signed difference (direction) and magnitude (volatility energy)
+            # x is RevIN-normalized: [B, seq_len, enc_in]
+            x_t = x.permute(0, 2, 1) # [B, enc_in, seq_len]
+            x_diff_signed = torch.zeros_like(x_t)
+            x_diff_signed[:, :, 1:] = x_t[:, :, 1:] - x_t[:, :, :-1]
+            x_diff_mag = torch.abs(x_diff_signed)
+
+            y_time_res = self.transient_extractor(x_diff_signed)
+            gate = self.transient_gate(x_diff_mag)
+
+            y_final = y_freq_out + gate * y_time_res
+        else:
+            y_final = y_freq_out
 
         if self.use_revin:
-            y = y * torch.sqrt(seq_var) + seq_mean
+            y_final = y_final * torch.sqrt(seq_var) + seq_mean
 
-        return y
+        return y_final

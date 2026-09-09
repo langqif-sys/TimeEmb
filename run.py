@@ -39,6 +39,7 @@ parser.add_argument('--use_hour_index', type=int, default=1, help='1: use hour_i
 parser.add_argument('--use_day_index', type=int, default=0, help='1: use day_index or 0: no use')
 parser.add_argument('--hour_length', type=int, default=24, help='embedding length of hour index')
 parser.add_argument('--day_length', type=int, default=7, help='embedding length of day index')
+parser.add_argument('--use_transient', type=int, default=1, help='1: use time-domain transient branch or 0: no use')
 # Optimization Objective
 parser.add_argument('--rec_lambda', type=float, default=0., help='weight of reconstruction function')
 parser.add_argument('--auxi_lambda', type=float, default=1, help='weight of auxilary function')
