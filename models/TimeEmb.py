@@ -283,13 +283,15 @@ class Model(nn.Module):
 
         # INN Coupling Interaction with Residual Gate
         B, C, F = x_dynamic.shape
-        freq_concat = torch.cat([x_dynamic.real, x_dynamic.imag], dim=-1)
-        freq_interacted = self.inn_block(freq_concat)
-        freq_real_inn, freq_imag_inn = torch.chunk(freq_interacted, 2, dim=-1)
-        x_dynamic_inn = torch.complex(freq_real_inn, freq_imag_inn)
+        # === ABLATION STUDY: Bypassed INN Block ===
+        # freq_concat = torch.cat([x_dynamic.real, x_dynamic.imag], dim=-1)
+        # freq_interacted = self.inn_block(freq_concat)
+        # freq_real_inn, freq_imag_inn = torch.chunk(freq_interacted, 2, dim=-1)
+        # x_dynamic_inn = torch.complex(freq_real_inn, freq_imag_inn)
 
         # Controlled by warm-started alpha_inn
-        x_dynamic = x_dynamic + self.alpha_inn * (x_dynamic_inn - x_dynamic)
+        # x_dynamic = x_dynamic + self.alpha_inn * (x_dynamic_inn - x_dynamic)
+        # ==========================================
 
         # Build frequency mask for trend vs fluctuation
         mask_trend = torch.zeros_like(x_dynamic)
